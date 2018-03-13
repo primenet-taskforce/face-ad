@@ -76,6 +76,175 @@
         text-align: center;
       }
     </style>
+
+  <script src="https://code.jquery.com/jquery-3.3.1.min.js" integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
+  <script>
+    $(function() {
+
+      var API_POOLING = false;  // falseの場合1回だけ実行
+      var API_POOLING_TIME = 5000;
+      var API_KEY = 'XXXXXXXXXXXXXXXXXXXXXXXX';
+      var API_URL = 'https://api.projectoxford.ai/face/v1.0/detect?';
+
+      //videoタグを取得
+      var video = document.getElementById('camera');
+      //カメラが起動できたかのフラグ
+      var localMediaStream = null;
+      //カメラ使えるかチェック
+      var hasGetUserMedia = function() {
+        return (navigator.getUserMedia || navigator.webkitGetUserMedia ||
+          navigator.mozGetUserMedia || navigator.msGetUserMedia);
+      };
+
+      //エラー
+      var onFailSoHard = function(e) {
+        console.log('エラー!', e);
+      };
+
+      if(!hasGetUserMedia()) {
+        alert("未対応ブラウザです。");
+      } else {
+        window.URL = window.URL || window.webkitURL;
+        navigator.getUserMedia  = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+        navigator.getUserMedia({video: true}, function(stream) {
+        video.src = window.URL.createObjectURL(stream);
+          localMediaStream = stream;
+        }, onFailSoHard);
+      }
+
+      // 画像化
+      var funcToImg = function() {
+        var dfd = $.Deferred();
+        if (localMediaStream) {
+          var canvas = document.getElementById('canvas');
+          //canvasの描画モードを2sに
+          var ctx = canvas.getContext('2d');
+
+          //videoの縦幅横幅を取得
+          var w = video.offsetWidth;
+          var h = video.offsetHeight;
+
+          //同じサイズをcanvasに指定
+          canvas.setAttribute("width", w);
+          canvas.setAttribute("height", h);
+
+          //canvasにコピー
+          ctx.drawImage(video, 0, 0, w, h);
+          //imgにpng形式で書き出し
+//          var img = document.getElementById('img');
+//          img.src = canvas.toDataURL('image/png');
+
+          var dataurl = canvas.toDataURL('image/png');
+
+          //DataURLをBLOBに変換
+          var mime_base64 = dataurl.split(',', 2);
+          var mime = mime_base64[0].split(';');
+          mime = mime[0].split(':');
+          mime = mime[1]? mime[1]: mime[0];
+          var base64 = window.atob(mime_base64[1]);
+          var len = base64.length;
+          var bin = new Uint8Array(len);
+          for (var i=0; i<len; i++)
+          {
+            bin[i] = base64.charCodeAt(i);
+          }
+          var blob = new Blob([bin], {type:mime});
+
+          dfd.resolve(blob);
+        }
+
+        return dfd.promise();
+      };
+
+
+      // API実行
+      var callAPI = function(blob) {
+        var dfd = $.Deferred();
+
+        var params = {
+          'Subscription-Key': API_KEY
+          ,returnFaceAttributes: 'age,gender'
+        };
+        $.ajax({
+          url: API_URL + $.param(params)
+          ,type: 'POST'
+          //contentTypeを明示する
+          ,contentType:'application/octet-stream'
+          //processDataをfalseにして自動処理せずBLOBをPOSTする
+          ,processData:false
+          ,data:blob
+          ,success: dfd.resolve
+          ,error: dfd.reject
+        });
+
+        return dfd.promise();
+      };
+
+
+      // 周期実行
+      var execToImg = function() {
+        setTimeout(function() {
+          funcToImg()
+          .then(function(blob) {
+            return callAPI(blob)
+          })
+          .then(function(data) {
+            success(data);
+            if (API_POOLING) execToImg();
+          })
+          .fail(function() {
+            error();
+          });
+        }, API_POOLING_TIME);
+      };
+      execToImg();
+
+
+      // API実行成功
+      var success = function(data) {
+
+        var cnt_mail = 0;
+        var cnt_femail = 0;
+        var sum_age = 0;
+
+        //検出した顔の分だけ繰り返す
+        $.each(data, function(){
+
+          var face = this.faceRectangle;
+          var attr = this.faceAttributes;
+        
+          switch(attr.gender) {
+            case 'male':
+              cnt_mail++;
+              break;
+            case 'female' :
+              cnt_femail++;
+              break;
+          }
+
+          sum_age+=attr.age;
+        });
+
+        //=============================================
+        if (data.length > 0) {
+          var gender  = (cnt_mail > cnt_femail) ? '男性' : '女性';
+          var avg_age = sum_age / data.length;
+          $("#gender").text(gender);
+          $("#year").text(avg_age);
+        } else {
+          $("#gender").text(' ');
+          $("#year").text(' ');
+        }
+        //=============================================
+      };
+
+
+      // 失敗
+      var error = function() {
+        alert("error");
+      };
+    });
+  </script>
   </head>
   <body>
     <header class="light-blue darken-2">
@@ -93,7 +262,8 @@
         <p>年齢:<span id="year">40歳以上</span></p>
       </div>
       <div class="camela">
-        ここにカメラを表示
+        <video id="camera" autoplay></video>
+        <canvas id="canvas" style="display:none;"></canvas>
       </div>
       <div class="yt">
         ここにユーチューブ動画を表示
